@@ -10,10 +10,9 @@
 -behaviour(gen_server).
 
 %% API
--export([start/4,join_ring/5]).
+-export([start/4,join_ring/5,add_key/3,del_key/2,get_value/2]).
 
--export([find_successor/2,get_fingerTable/1,stabilize/1,fix_fingers/1,check_pred/1,notify/2,add_key/3,
-	 get_value/2,del_key/2]).
+-export([find_successor/2,get_fingerTable/1,stabilize/1,fix_fingers/1,check_pred/1,notify/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -49,6 +48,14 @@ find_successor(Name, Id) ->
 		{find_successor, Succ} -> Succ
     end.
 
+    
+get_pred(Name, Id) -> 
+	io:format("get_pred~n"),
+	gen_server:cast(Name, {get_pred, self(), Id}),
+	receive
+		{get_pred, Pred} -> Pred
+	end.
+
 add_key(_Name, _Key, _Value) ->
     io:format("add_key not implemented yet~n"),
     not_implemented.
@@ -65,6 +72,7 @@ del_key(_Name, _Key) ->
 stabilize  (Name) -> gen_server:cast(Name, stabilize).
 fix_fingers(Name) -> gen_server:cast(Name, fix_fingers).
 check_pred (Name) -> gen_server:cast(Name, check_pred).
+
 
 notify(Name, Pred) -> gen_server:cast(Name, {notify, Pred}).
 
@@ -105,6 +113,8 @@ init({Ring, Name, Timer, M, M2}) ->
 		N = pot2(M2),
 		Me = #id{name=Name, hash=erlang:phash2(Name) rem N},
 		N1 = #id{name=M, hash=erlang:phash2(M) rem N},
+		put({finger,1}, Me),
+		createFingerTable(2,M2),
 		{ok,
 		 #state{
 		   id    = Me,
@@ -145,10 +155,47 @@ handle_cast({find_successor, Proc, Id}, State) ->
 	io:format("handle_cast~n"),
     find_succ(Proc, Id, State),
     {noreply, State};
-handle_cast(stabilize,   State)    -> io:format("~w stabilize~n",[State#state.id]),   {noreply, State};
-handle_cast(fix_fingers, State)    -> io:format("~w fix_fingers~n",[State#state.id]), {noreply, State};
-handle_cast(check_pred,  State)    -> io:format("~w check_pred~n",[State#state.id]),  {noreply, State};
-handle_cast({notify,_Pred}, State) -> {noreply, State}.
+    
+handle_cast({get_pred, Proc, Id}, State) -> 
+	io:format("get pred for: ~w ~n", [State#state.id]),
+	get_pre(Proc, Id, State),
+	{noreply, State};
+    
+handle_cast(stabilize, State) -> 
+	io:format("stabilize:~w ~n",[State#state.id#id.name]),
+	io:format("succ:~w ~n",[State#state.succ#id.name]),
+	if
+		State#state.succ == State#state.id ->
+			io:format("succ.pred = nil ~n"),
+			{noreply, State};
+		true -> 
+			X = get_pred(State#state.succ#id.name, State#state.id),
+			SuccPred = X#state.pred,
+			case SuccPred of
+				nil -> io:format("succ.pred = null ~n");
+				_-> io:format("succ.pred = ~w ~n", SuccPred#id.name)
+			end,
+			{noreply, State}
+	end;
+
+handle_cast(fix_fingers, State) -> io:format("fix_fingers: ~w ~n",[State#state.id]), 
+	State = State#state{next = State#state.next + 1},
+	if
+		State#state.next > State#state.m ->
+			State = State#state{next = 1};
+		true ->
+			put({finger, State#state.next}, find_successor(State#state.id#id.name, State#state.n+pot2(State#state.next-1)))
+	end,
+	{noreply, State};
+handle_cast(check_pred,  State) -> io:format("check_pred: ~w ~n",[State#state.id]),  
+	
+	{noreply, State};
+handle_cast({notify, Pred}, State) -> io:format("notify: ~w ~n",[State#state.id]),
+	case Pred of
+		nil -> State = State#state{pred = Pred};
+		_ ->  io:format("predecesor not nil")
+	end,
+	{noreply, State}.
 
 %%--------------------------------------------------------------------
 %% Function: handle_info(Info, State) -> {noreply, State} |
@@ -180,9 +227,14 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-find_succ(Proc, _Id,#state{id=#id{name=Me,hash=Hash}}) ->
+find_succ(Proc, _Id, #state{id=#id{name=Me,hash=Hash}}) ->
 	io:format("find_succ~n"),
-    Proc ! {find_successor, {Me, Hash}}.
+	Id = #id{name=Me, hash=Hash},
+    Proc ! {find_successor, Id}.
+    
+get_pre(Proc, _Id, State=#state{id=#id{name=Me,hash=Hash}}) ->
+	io:format("find_pre~n"),
+    Proc ! {get_pred, State}.
 
 pot2(0) -> 1;
 pot2(N) -> 2*pot2(N-1).
