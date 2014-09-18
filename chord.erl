@@ -1,14 +1,17 @@
 %%%-------------------------------------------------------------------
 %%% File    : chord.erl
-%%% Author  : JCastro <jose.r.castro@gmail.com>
-%%% Description : 
-%%%
-%%% Created : 28 Aug 2014 by JCastro <>
+%%% Author  : Andres Morales - 201016752
+%%% Description :  I Progra BDA - II-2014
+%%% Nota: La implementacion no esta completa, esto debido a que no 
+%%% sabia que se tenia que utilizar gen_server,
+%%% espero subir una nueva version del codigo ya completa posteriormente
 %%%-------------------------------------------------------------------
 -module(chord).
 
 -behaviour(gen_server).
 
+-define(M, 10).
+-define(N, 1024).
 %% API
 -export([start/4,join_ring/5,add_key/3,del_key/2,get_value/2]).
 
@@ -46,8 +49,9 @@ find_successor(Name, Id) ->
     gen_server:cast(Name, {find_successor, self(), Id}),
     receive
 		{find_successor, Succ} -> Succ
+		after 1000 -> Id
     end.
-
+ 
     
 get_pred(Name, Id) -> 
 	io:format("get_pred~n"),
@@ -56,17 +60,35 @@ get_pred(Name, Id) ->
 		{get_pred, Pred} -> Pred
 	end.
 
-add_key(_Name, _Key, _Value) ->
-    io:format("add_key not implemented yet~n"),
-    not_implemented.
+add_key(Name, Key, Value) ->
+	KeyHash = erlang:phash2(Key) rem ?N,
+	Succ = find_successor(Name, #id{name=Name, hash=erlang:phash2(Name) rem ?N}),
+	if KeyHash > ?N, KeyHash < Succ#id.hash -> 
+		put({Name, Key}, Value);
+	true -> 
+		gen_server:cast(Succ#id.name, {add_key, Name, Key, Value})
+	end,
+	ok.
 
-get_value(_Name, _Key) ->
-    io:format("get_value not implemented yet~n"),
-    not_implemented.
+get_value(Name, Key) ->
+    KeyHash = erlang:phash2(Key) rem ?N,
+    Succ = find_successor(Name, #id{name=Name, hash=erlang:phash2(Name) rem ?N}),
+	if KeyHash > ?N, KeyHash < Succ#id.hash -> 
+		io:format("Key: ~w, Value: ~w", Key, get({Name, Key}));
+	true -> 
+		gen_server:cast(Succ#id.name, {get_key, Name, Key}) 
+	end,
+    ok.
 
-del_key(_Name, _Key) ->
-    io:format("del_key not implemented yet~n"),
-    not_implemented.
+del_key(Name, Key) ->
+    KeyHash = erlang:phash2(Key) rem ?N,
+    Succ = find_successor(Name, #id{name=Name, hash=erlang:phash2(Name) rem ?N}),
+	if KeyHash > ?N, KeyHash < Succ#id.hash -> 
+		erase({Name, Key});
+	true -> 
+		gen_server:cast(Succ#id.name, {del_key, Name, Key}) 
+	end,
+    ok.
 
 
 stabilize  (Name) -> gen_server:cast(Name, stabilize).
@@ -155,6 +177,7 @@ handle_cast({find_successor, Proc, Id}, State) ->
 	io:format("handle_cast~n"),
     find_succ(Proc, Id, State),
     {noreply, State};
+
     
 handle_cast({get_pred, Proc, Id}, State) -> 
 	io:format("get pred for: ~w ~n", [State#state.id]),
@@ -178,15 +201,34 @@ handle_cast(stabilize, State) ->
 			{noreply, State}
 	end;
 
-handle_cast(fix_fingers, State) -> io:format("fix_fingers: ~w ~n",[State#state.id]), 
-	State = State#state{next = State#state.next + 1},
+handle_cast(fix_fingers, State) -> io:format("fix_fingers: ~w ~n", [State#state.id]), 
+	NewState = State#state{next = State#state.next + 1},
 	if
-		State#state.next > State#state.m ->
-			State = State#state{next = 1};
+		NewState#state.next > State#state.m ->
+			NewState2 = State#state{next = 1},
+			{noreply, NewState2};
 		true ->
-			put({finger, State#state.next}, find_successor(State#state.id#id.name, State#state.n+pot2(State#state.next-1)))
-	end,
+			NewId = #id{name = State#state.id#id.name, hash = State#state.id#id.hash},
+			Succ = find_successor(State#state.id#id.name, NewId),
+			case Succ of
+				NewId -> {noreply, State};
+				_ -> put({finger, State#state.next}, Succ),
+				{noreply, NewState}
+			end
+			
+	end;
+handle_cast({add_key, Name, Key, Value}, State) -> io:format("add key: ~w ~n",[State#state.id]), 
+	add_key(Name, Key, Value),
 	{noreply, State};
+	
+handle_cast({get_value, Name, Key}, State) -> io:format("get key: ~w ~n",[State#state.id]), 
+	get_value(Name, Key),
+	{noreply, State};
+	
+handle_cast({del_key, Name, Key}, State) -> io:format("del key: ~w ~n",[State#state.id]), 
+	del_key(Name, Key),
+	{noreply, State};
+
 handle_cast(check_pred,  State) -> io:format("check_pred: ~w ~n",[State#state.id]),  
 	
 	{noreply, State};
@@ -231,8 +273,9 @@ find_succ(Proc, _Id, #state{id=#id{name=Me,hash=Hash}}) ->
 	io:format("find_succ~n"),
 	Id = #id{name=Me, hash=Hash},
     Proc ! {find_successor, Id}.
+   
     
-get_pre(Proc, _Id, State=#state{id=#id{name=Me,hash=Hash}}) ->
+get_pre(Proc, _Id, State=#state{id=#id{name=_,hash=_}}) ->
 	io:format("find_pre~n"),
     Proc ! {get_pred, State}.
 
