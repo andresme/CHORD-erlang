@@ -1,10 +1,7 @@
 %%%-------------------------------------------------------------------
-%%% File    : chord.erl
+%%% File    : Chord.erl
 %%% Author  : Andres Morales - 201016752
 %%% Description :  I Progra BDA - II-2014
-%%% Nota: La implementacion no esta completa, esto debido a que no 
-%%% sabia que se tenia que utilizar gen_server,
-%%% espero subir una nueva version del codigo ya completa posteriormente
 %%%-------------------------------------------------------------------
 -module(chord).
 
@@ -65,6 +62,8 @@ add_key(Name, Key, Value) ->
 	Succ = find_successor(Name, #id{name=Name, hash=erlang:phash2(Name) rem ?N}),
 	if KeyHash > ?N, KeyHash < Succ#id.hash -> 
 		put({Name, Key}, Value);
+	KeyHash < ?N ->
+		put({Name, Key}, Value);
 	true -> 
 		gen_server:cast(Succ#id.name, {add_key, Name, Key, Value})
 	end,
@@ -74,7 +73,9 @@ get_value(Name, Key) ->
     KeyHash = erlang:phash2(Key) rem ?N,
     Succ = find_successor(Name, #id{name=Name, hash=erlang:phash2(Name) rem ?N}),
 	if KeyHash > ?N, KeyHash < Succ#id.hash -> 
-		io:format("Key: ~w, Value: ~w", Key, get({Name, Key}));
+		io:format("Key: ~w, Value: ~w", [Key, get({Name, Key})]);
+	KeyHash < ?N ->
+		io:format("Key: ~w, Value: ~w", [Key, get({Name, Key})]);
 	true -> 
 		gen_server:cast(Succ#id.name, {get_key, Name, Key}) 
 	end,
@@ -84,6 +85,8 @@ del_key(Name, Key) ->
     KeyHash = erlang:phash2(Key) rem ?N,
     Succ = find_successor(Name, #id{name=Name, hash=erlang:phash2(Name) rem ?N}),
 	if KeyHash > ?N, KeyHash < Succ#id.hash -> 
+		erase({Name, Key});
+	KeyHash < ?N -> 
 		erase({Name, Key});
 	true -> 
 		gen_server:cast(Succ#id.name, {del_key, Name, Key}) 
