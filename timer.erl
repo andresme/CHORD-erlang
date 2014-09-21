@@ -18,9 +18,9 @@ click(Name,TicMin,TicMax) ->
 	stop -> ok
     after N ->
 	    case random:uniform(3) of
-		1 -> chord:stabilize  (Name);
+		1 -> chord:stabilize(Name);
 		2 -> chord:fix_fingers(Name);
-		3 -> chord:check_pred (Name)
+		3 -> chord:check_pred(Name)
 	    end,
 	    click(Name,TicMin,TicMax)
     end.

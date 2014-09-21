@@ -1,19 +1,17 @@
 %%%-------------------------------------------------------------------
 %%% File    : chord.erl
-%%% Author  : JCastro <jose.r.castro@gmail.com>
-%%% Description : 
+%%% Author  : Andres Morales Esquivel
+%%% Description : I-Progra 2014 BDA
 %%%
-%%% Created : 28 Aug 2014 by JCastro <>
 %%%-------------------------------------------------------------------
 -module(chord).
 
 -behaviour(gen_server).
 
 %% API
--export([start/4,join_ring/4, get_state/1]).
+-export([start/4, join_ring/4, get_state/1, add_key/3, get_value/2, del_key/2]).
 
--export([find_successor/2,get_fingerTable/1,stabilize/1,fix_fingers/1,check_pred/1,notify/2,add_key/3,
-	 get_value/2,del_key/2]).
+-export([find_successor/2,get_fingerTable/1,stabilize/1,fix_fingers/1,check_pred/1,notify/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -43,9 +41,11 @@ join_ring(Name, Other, TicMin, TicMax) ->
     gen_server:start_link({local, Name}, ?MODULE, {join_ring, Name, Timer, Other}, []).
 
 find_successor(Name, Id) ->
+	%io:format("finding successor~n"),
     gen_server:cast(Name, {find_successor, self(), Id}),
     receive
-	{find_successor, Succ} -> Succ
+		{find_successor, Succ} ->
+			Succ
     end.
 
 get_server(Name) ->
@@ -78,17 +78,45 @@ get_state(Name) ->
 			io:format("==========STATE==========~n")
 	end.
 
-add_key(_Name, _Key, _Value) ->
-    io:format("add_key not implemented yet~n"),
-    not_implemented.
+add_key(Name, Key, Value) ->
+    Server = get_server(Name),
+    KeyHash = erlang:phash2(Name) rem Server#state.n,
+    CurrentId = Server#state.id#id.hash,
+    SuccId = Server#state.succ#id.hash,
+    if KeyHash >= CurrentId, KeyHash =< SuccId ->
+		put(Key, Value);
+	KeyHash >= Server#state.id#id.hash, Server#state.id#id.hash >= Server#state.succ#id.hash ->
+		put(Key, Value);
+	true -> 
+		gen_server:cast(Server#state.succ#id.name, {add_key, Key, Value})
+	end,
+	Value.
 
-get_value(_Name, _Key) ->
-    io:format("get_value not implemented yet~n"),
-    not_implemented.
+get_value(Name, Key) ->
+    Server = get_server(Name),
+    KeyHash = erlang:phash2(Name) rem Server#state.n,
+    CurrentId = Server#state.id#id.hash,
+    SuccId = Server#state.succ#id.hash,
+    if KeyHash >= CurrentId, KeyHash =< SuccId ->
+		get(Key);
+	KeyHash >= Server#state.id#id.hash, Server#state.id#id.hash >= Server#state.succ#id.hash ->
+		get(Key);
+	true -> 
+		gen_server:cast(Server#state.succ#id.name, {get_value, Key})
+    end.
 
-del_key(_Name, _Key) ->
-    io:format("del_key not implemented yet~n"),
-    not_implemented.
+del_key(Name, Key) ->
+    Server = get_server(Name),
+    KeyHash = erlang:phash2(Name) rem Server#state.n,
+    CurrentId = Server#state.id#id.hash,
+    SuccId = Server#state.succ#id.hash,
+    if KeyHash >= CurrentId, KeyHash =< SuccId ->
+		erase(Key);
+	KeyHash >= Server#state.id#id.hash, Server#state.id#id.hash >= Server#state.succ#id.hash ->
+		erase(Key);
+	true -> 
+		gen_server:cast(Server#state.succ#id.name, {del_key, Key})
+	end.
 
 
 stabilize  (Name) -> gen_server:cast(Name, stabilize).
@@ -202,12 +230,16 @@ handle_cast(stabilize,   State) ->
 		end,
 		XHash = X2#state.id#id.hash,
 		if XHash < State#state.succ#id.hash, XHash > State#state.id#id.hash ->
+			%io:format("New succ found~n"),
 			State2 = State#state{succ = X2#state.id};
 		State#state.id#id.hash == State#state.succ#id.hash ->
+			%io:format("New succ found~n"),
 			State2 = State#state{succ = X2#state.id};
 		State#state.id#id.hash > State#state.succ#id.hash, State#state.succ#id.hash > XHash ->
+			%io:format("New succ found~n"),
 			State2 = State#state{succ = X2#state.id};
 		true ->
+			%io:format("No new succ found~n"),
 			State2 = State
 		end;
 	true -> 
@@ -217,12 +249,20 @@ handle_cast(stabilize,   State) ->
 	notify(State2#state.succ#id.name, State2#state.id),
 	{noreply, State2};
 
-handle_cast(fix_fingers, State) -> 
+handle_cast(fix_fingers, State)-> 
 	io:format("~w fix_fingers~n",[State#state.id]), 
-	{noreply, State};
-	
-
-
+	Next = State#state.next,
+	NextAcc = Next + 1,
+	if NextAcc > State#state.m ->
+		NextAcc2 = 1;
+	true ->
+		NextAcc2 = NextAcc
+	end,
+	SuccHash = State#state.id#id.hash,
+	SuccHash2 = (SuccHash + pot2(NextAcc2-1)) rem State#state.n,
+	SuccId = #id{name=none, hash=SuccHash2},
+	put({finger, Next}, find_succ(SuccId, State)), 
+	{noreply, State#state{next = Next}};
 
 handle_cast(check_pred,  State) -> 
 	io:format("~w check_pred~n",[State#state.id]),
@@ -239,32 +279,41 @@ handle_cast(check_pred,  State) ->
 	end,
 	{noreply, State2};
 
-handle_cast({notify,Pred}, State) -> 
+handle_cast({notify, Pred}, State) -> 
 	if Pred /= nil, State#state.pred == nil ->
-		io:format("Pred is nil~n"),
+		%io:format("New Pred found~n"),
 		Pred_id = #id{name=Pred#id.name, hash=Pred#id.hash},
 		StateNew = State#state{pred = Pred_id};
 	Pred /= nil, Pred#id.hash > State#state.pred#id.hash, Pred#id.hash < State#state.id#id.hash ->
-		io:format("New Pred found~n"),
+		%io:format("New Pred found~n"),
 		Pred_id = #id{name=Pred#id.name, hash=Pred#id.hash},
 		StateNew = State#state{pred = Pred_id};
 	Pred /= nil, Pred#id.hash < State#state.pred#id.hash, State#state.pred#id.hash == State#state.id#id.hash ->
-		io:format("New Pred found~n"),
+		%io:format("New Pred found~n"),
 		Pred_id = #id{name=Pred#id.name, hash=Pred#id.hash},
 		StateNew = State#state{pred = Pred_id};
 	Pred /= nil, Pred#id.hash < State#state.pred#id.hash, State#state.pred#id.hash > State#state.id#id.hash ->
-		io:format("New Pred found~n"),
+		%io:format("New Pred found~n"),
 		Pred_id = #id{name=Pred#id.name, hash=Pred#id.hash},
 		StateNew = State#state{pred = Pred_id};
 	true -> 
-		io:format("No new pred found~n"),
+		%io:format("No new pred found~n"),
 		StateNew = nil
 	end,
 	if StateNew /= nil ->
 		{noreply, StateNew};
 	true ->
 		{noreply, State}
-	end.
+	end;
+	
+handle_cast({add_key, Key, Value}, State) -> 
+	add_key(State#state.id#id.name, Key, Value);
+	
+handle_cast({get_value, Key}, State) -> 
+	get_value(State#state.id#id.name, Key);
+	
+handle_cast({del_key, Key}, State) -> 
+	del_key(State#state.id#id.name, Key).
 
 %%--------------------------------------------------------------------
 %% Function: handle_info(Info, State) -> {noreply, State} |
@@ -296,8 +345,58 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-find_succ(Proc, _Id,#state{id=#id{name=Me,hash=Hash}}) ->
-    Proc ! {find_successor, #id{name=Me, hash=Hash}}.
+find_succ(Id, State) ->
+	io:format("Finding Succesor for: ~w~n", [State#state.id#id.name]),
+	if Id#id.hash >= State#state.id#id.hash, Id#id.hash < State#state.succ#id.hash ->
+		%io:format("Id E n,succ:~n"),
+		State#state.succ;
+	true ->
+		%io:format("else ~n"),
+		IdN0 = closest_preceding_node(Id, State),
+		if IdN0#id.hash == State#state.id#id.hash ->
+			IdN0;
+		true -> 
+			Succ = find_successor(IdN0#id.name, Id),
+			Succ
+		end
+	end.
+
+
+find_succ(Proc, Id, State) ->
+	io:format("Finding Succesor for: ~w~n", [State#state.id#id.name]),
+	if Id#id.hash >= State#state.id#id.hash, Id#id.hash < State#state.succ#id.hash ->
+		%io:format("Id E n,succ:~n"),
+		Proc ! {find_successor, State#state.succ};
+	true ->
+		%io:format("else ~n"),
+		IdN0 = closest_preceding_node(Id, State),
+		if IdN0#id.hash == State#state.id#id.hash ->
+			Proc ! {find_successor, IdN0};
+		true -> 
+			Succ = find_successor(IdN0#id.name, Id),
+			Proc ! {find_successor, Succ}
+		end
+	end.
+
+closest_preceding_node(Id, State) ->
+	%io:format("closest_preceding_node for: ~w~n",[State#state.id#id.name]),
+	State2 = closest_preceding_node_aux(Id, State, State#state.m),
+	State2.
+
+closest_preceding_node_aux(Id, State, I) ->
+	%io:format("For iter ~w~n", [I]),
+	Finger_i = get({finger, I}),
+	if Finger_i /= nil, Finger_i#id.hash > State#state.id#id.hash, Finger_i#id.hash < Id#id.hash ->
+		%io:format("Finger[i] E n, id~n"),
+		Finger_i;
+	I > 1 -> 
+		%io:format("Calling aux iter~n"),
+		New_i = I - 1,
+		closest_preceding_node_aux(Id, State, New_i);
+	true -> 
+		%io:format("return state~n"),
+		State#state.id
+	end.
 
 get_serv(Proc, State=#state{id=#id{name=_,hash=_}}) ->
 	Proc ! {get_server, State}.
