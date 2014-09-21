@@ -1,0 +1,6 @@
+c(chord).
+chord:start(nodeMaster, 10, 100, 500).
+chord:join_ring(node1, nodeMaster, 100, 500).
+chord:join_ring(node8, nodeMaster, 100, 500).
+chord:join_ring(node5, nodeMaster, 100, 500).
+chord:join_ring(node10, nodeMaster, 100, 500).
